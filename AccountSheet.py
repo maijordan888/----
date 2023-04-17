@@ -128,14 +128,13 @@ class Account(ABC):
     PAYMENT_SHORTCUT = SETTING['PAYMENT_SHORTCUT']
 
     def __init__(self, Date:Tuple[str, str], Freq:str, 
-                 AccountSheet:Dict[str, pd.DataFrame]) -> None:
+                 AccountSheet:pd.DataFrame) -> None:
         """
 
         Args:
             Date (Tuple[str, str]): (Start Date, End Date)
             Freq (str): 此帳目表的記帳頻率(ex: 表內每列代表"每月")。
-            AccountSheet (Dict[str, pd.DataFrame]): 
-                帳目表，key值為類別，value為該類別下帳目表。
+            AccountSheet (pd.DataFrame): 帳目表。
         """
         super().__init__()
         self.StartDate = Date[0]
@@ -176,8 +175,8 @@ class AccountOperator(ABC):
         AccountSheet = self.ReplaceColumnName(AccountSheet, 'Date', 
                                               ['Date', 'date', '日期'], 0)
         AccountSheet.Date = pd.to_datetime(AccountSheet.Date)
-        AccountSheet = AccountSheet.set_index('Date')
-        AccountSheet.sort_index(inplace=True)
+        AccountSheet.sort_values(by='Date',inplace=True)
+        
         # 其餘欄位(類別、項目名稱、支出/收入、標籤)
         AccountSheet = self.ReplaceColumnName(AccountSheet, 'Category', 
                                               ['類別', 'Category', 'category'], 1)
@@ -197,7 +196,11 @@ class AccountOperator(ABC):
         AccountSheet = self.RearrangeAccountSheetByFreq(AccountSheet, Freq, RearrangeSubset)
         
         # 建置Account
-        Account()
+        start_date = AccountSheet.Date.min()
+        end_date = AccountSheet.Date.min()
+        Date = (start_date, end_date)
+        
+        return Account(Date, Freq, AccountSheet)
     
     def ReplaceColumnName(self, DataFrame:pd.DataFrame, 
                           replace:str, 
@@ -236,22 +239,29 @@ class AccountOperator(ABC):
                                     subset:List[str]=['Category']):
         if isinstance(AccountSheet, Account):
             print("請輸入AccountSheet，而非Account。")
-            Account = AccountSheet
+            account = AccountSheet
             AccountSheet = AccountSheet.AccountSheet
         
+        AccountSheet.set_index('Date', inplace=True)
         if Freq != 'r':     # Freq為row的話，不處理。
             AccountSheet = AccountSheet.groupby(by=subset).resample(Freq).sum()
-            AccountSheet.set_index('Date', inplace=True)
+            AccountSheet.reset_index(inplace=True)
+            temp_col = AccountSheet.pop('Date')
+            AccountSheet.insert(0, 'Date', temp_col)
         
         if isinstance(AccountSheet, Account):
-            Account.AccountSheet = AccountSheet
-            return Account
+            account.AccountSheet = AccountSheet
+            return account
         else:
             return AccountSheet
     
 if __name__ == '__main__':
     
     sheet_url = 'https://docs.google.com/spreadsheets/d/1Nz0rEL3-wik4jKjCBZzgb4fRzODqNZWCpg-GJ3Po5J8/edit#gid=0'
+    ws = RetrieveWebSheet(sheet_url)
+    Operator = AccountOperator()
+    Account1 = Operator.DataFrame2Account(ws, Freq='1M')
+    temp = Account1.AccountSheet
     
 
 # gc = pygsheets.authorize(service_account_file=r'./key.json')
