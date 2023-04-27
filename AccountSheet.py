@@ -139,31 +139,59 @@ class Account(ABC):
             Key (List[str]): 索引用欄位名稱。
         """
         super().__init__()
-        self.StartDate = Date[0]
-        self.EndDate = Date[1]
-        self.Date = Date
-        self.Freq = Freq
-        self.AccountSheet = AccountSheet
-        self.Key = Key
+        self._StartDate = Date[0]
+        self._EndDate = Date[1]
+        self._Date = Date
+        self._Freq = Freq
+        self._AccountSheet = AccountSheet
+        self._Key = Key
     
-    def GetStartDate(self):
-        return self.StartDate
+    @property
+    def Date(self):
+        return self._Date
     
-    def GetEndDate(self):
-        return self.EndDate
-
-    def GetDate(self):
-        return self.Date
+    @Date.setter
+    def Date(self, value):
+        self._Date = value
+        self._StartDate = value[0]
+        self._EndDate = value[1]
     
-    def GetAccountSheet(self):
-        return self.AccountSheet
+    @property
+    def Freq(self):
+        return self._Freq
     
-    def GetKey(self):
-        return self.Key
+    @property
+    def StartDate(self):
+        return self._StartDate
     
-    def GetFreq(self):
-        return self.Freq
+    @property
+    def EndDate(self):
+        return self._EndDate
     
+    @property
+    def AccountSheet(self):
+        return self._AccountSheet
+    
+    @AccountSheet.setter
+    def AccountSheet(self, Sheet):
+        self._AccountSheet = Sheet
+        # 使用Date而非_Date讓他自己填
+        self.Date, self._Key = self.RetrieveAccountSheetFundamentalInfo(Sheet)
+    
+    @property
+    def Key(self):
+        return self._Key
+    
+    @staticmethod
+    def RetrieveAccountSheetFundamentalInfo(AccountSheet):
+        start_date = AccountSheet.Date.min()
+        end_date = AccountSheet.Date.max()
+        Date = (start_date, end_date)
+        Key = AccountSheet.columns.to_list()
+        Key.remove('Date')
+        Key.remove('Cost/Income')
+        return Date, Key
+        
 def RetrieveWebSheet(url, sheet_title='工作表1', key_file_path=r'./key.json'):
     gc = pygsheets.authorize(service_account_file=key_file_path)
     sh = gc.open_by_url(url)
@@ -208,12 +236,8 @@ class AccountOperator(ABC):
         AccountSheet = self.RearrangeAccountSheetByFreq(AccountSheet, Freq, RearrangeSubset)
         
         # 建置Account
-        start_date = AccountSheet.Date.min()
-        end_date = AccountSheet.Date.min()
-        Date = (start_date, end_date)
-        Key = AccountSheet.columns.to_list()
-        Key.remove('Date')
-        Key.remove('Cost/Income')
+        Date, Key = Account.RetrieveAccountSheetFundamentalInfo(AccountSheet)
+
         if Freq != 'r':
             assert Key == RearrangeSubset
             
@@ -286,18 +310,35 @@ class AccountOperator(ABC):
         # 建置Account
         AccountSheet = self.RearrangeAccountSheetByFreq(account.AccountSheet, 
                                                         Freq, subset)      
-        start_date = AccountSheet.Date.min()
-        end_date = AccountSheet.Date.min()
-        Date = (start_date, end_date)
-        Key = AccountSheet.columns.to_list()
-        Key.remove('Date')
-        Key.remove('Cost/Income')
+
+        Date, Key = Account.RetrieveAccountSheetFundamentalInfo(AccountSheet)
         
         if Freq != 'r':
             assert Key == subset
                 
         return Account(Date, Freq, Key, AccountSheet)
     
+    def Cut(self, account:Account, 
+            start_date:str, end_date:str=None, inplace=False):
+        AccountSheet = account.AccountSheet
+
+        AccountSheet = AccountSheet[start_date < AccountSheet.Date]
+        if end_date is not None:
+            AccountSheet = AccountSheet[AccountSheet.Date < end_date]
+
+        if end_date is None:
+            Date = (start_date, account.EndDate)
+        else:
+            Date = (start_date, end_date)
+
+        if inplace == False:
+            Freq = account.Freq
+            Key = account.Key
+            return Account(Date, Freq, Key, AccountSheet)
+        else:
+            # 自動更新除了Freq外的其他項(Date, Key)
+            account.AccountSheet = AccountSheet
+        
 if __name__ == '__main__':
     
     sheet_url = 'https://docs.google.com/spreadsheets/d/1Nz0rEL3-wik4jKjCBZzgb4fRzODqNZWCpg-GJ3Po5J8/edit#gid=0'
@@ -306,8 +347,9 @@ if __name__ == '__main__':
     print('Operating...')
     Operator = AccountOperator()
     Account1 = Operator.DataFrame2Account(ws)
-    Account1_l = Operator.RearrangeAccountByFreq(Account1, '1M', ['Category', 'Label'])
-    temp2 = Account1_l.AccountSheet
+    Account1_Cl = Operator.RearrangeAccountByFreq(Account1, '1M', ['Category', 'Label'])
+    Account1_l = Operator.RearrangeAccountByFreq(Account1, '1M', ['Label'])
+    Account1_cut = Operator.Cut(Account1, '2023-02-01')
     print('End')
 
 # gc = pygsheets.authorize(service_account_file=r'./key.json')
