@@ -128,6 +128,7 @@ class Account(ABC):
     PAYMENT_SHORTCUT = SETTING['PAYMENT_SHORTCUT']
 
     def __init__(self, Date:Tuple[str, str], Freq:str, 
+                 Key:List[str], 
                  AccountSheet:pd.DataFrame) -> None:
         """
 
@@ -135,6 +136,7 @@ class Account(ABC):
             Date (Tuple[str, str]): (Start Date, End Date)
             Freq (str): 此帳目表的記帳頻率(ex: 表內每列代表"每月")。
             AccountSheet (pd.DataFrame): 帳目表。
+            Key (List[str]): 索引用欄位名稱。
         """
         super().__init__()
         self.StartDate = Date[0]
@@ -142,6 +144,7 @@ class Account(ABC):
         self.Date = Date
         self.Freq = Freq
         self.AccountSheet = AccountSheet
+        self.Key = Key
     
     def GetStartDate(self):
         return self.StartDate
@@ -151,7 +154,16 @@ class Account(ABC):
 
     def GetDate(self):
         return self.Date
-
+    
+    def GetAccountSheet(self):
+        return self.AccountSheet
+    
+    def GetKey(self):
+        return self.Key
+    
+    def GetFreq(self):
+        return self.Freq
+    
 def RetrieveWebSheet(url, sheet_title='工作表1', key_file_path=r'./key.json'):
     gc = pygsheets.authorize(service_account_file=key_file_path)
     sh = gc.open_by_url(url)
@@ -167,7 +179,7 @@ class AccountOperator(ABC):
     def __init__(self) -> None:
         super().__init__()
     
-    def DataFrame2Account(self, DataFrame:pd.DataFrame, Freq:str='Auto', 
+    def DataFrame2Account(self, DataFrame:pd.DataFrame, Freq:str='r', 
                           RearrangeSubset:List[str]=['Category'])->Account:
         AccountSheet = DataFrame.copy()
 
@@ -199,8 +211,13 @@ class AccountOperator(ABC):
         start_date = AccountSheet.Date.min()
         end_date = AccountSheet.Date.min()
         Date = (start_date, end_date)
-        
-        return Account(Date, Freq, AccountSheet)
+        Key = AccountSheet.columns.to_list()
+        Key.remove('Date')
+        Key.remove('Cost/Income')
+        if Freq != 'r':
+            assert Key == RearrangeSubset
+            
+        return Account(Date, Freq, Key, AccountSheet)
     
     def ReplaceColumnName(self, DataFrame:pd.DataFrame, 
                           replace:str, 
@@ -235,34 +252,63 @@ class AccountOperator(ABC):
             raise ValueError("date_count < 0.")
     
     
-    def RearrangeAccountSheetByFreq(self, AccountSheet:pd.DataFrame, Freq:str, 
+    def RearrangeAccountSheetByFreq(self, AccountSheet:pd.DataFrame, Freq:str='r', 
                                     subset:List[str]=['Category']):
-        if isinstance(AccountSheet, Account):
-            print("請輸入AccountSheet，而非Account。")
-            account = AccountSheet
-            AccountSheet = AccountSheet.AccountSheet
+        assert type(AccountSheet) == pd.DataFrame
         
-        AccountSheet.set_index('Date', inplace=True)
+        if 'Label' in subset:
+            temp = pd.DataFrame([], columns=AccountSheet.columns)
+            for i in range(len(AccountSheet)):
+                label = AccountSheet['Label'].iloc[i].split(',')
+                Add = AccountSheet.iloc[i,:].copy()
+                if len(label) > 1:
+                    for l in label:
+                        Add['Label'] = l
+                        temp = temp.append(Add)                        
+                else:
+                    temp = temp.append(Add)
+            AccountSheet = temp
+        
         if Freq != 'r':     # Freq為row的話，不處理。
-            AccountSheet = AccountSheet.groupby(by=subset).resample(Freq).sum()
-            AccountSheet.reset_index(inplace=True)
+            AccountSheet.set_index('Date', inplace=True)
+            AccountSheet = AccountSheet.groupby(by=subset).resample(Freq)['Cost/Income'].sum()
+            AccountSheet = pd.DataFrame(AccountSheet).reset_index()
             temp_col = AccountSheet.pop('Date')
-            AccountSheet.insert(0, 'Date', temp_col)
+            AccountSheet.insert(0, 'Date', temp_col)        
+
+        return AccountSheet
+    
+    def RearrangeAccountByFreq(self, account:Account, Freq:str, 
+                               subset:List[str]=['Category']):
+
+        assert isinstance(account, Account)
         
-        if isinstance(AccountSheet, Account):
-            account.AccountSheet = AccountSheet
-            return account
-        else:
-            return AccountSheet
+        # 建置Account
+        AccountSheet = self.RearrangeAccountSheetByFreq(account.AccountSheet, 
+                                                        Freq, subset)      
+        start_date = AccountSheet.Date.min()
+        end_date = AccountSheet.Date.min()
+        Date = (start_date, end_date)
+        Key = AccountSheet.columns.to_list()
+        Key.remove('Date')
+        Key.remove('Cost/Income')
+        
+        if Freq != 'r':
+            assert Key == subset
+                
+        return Account(Date, Freq, Key, AccountSheet)
     
 if __name__ == '__main__':
     
     sheet_url = 'https://docs.google.com/spreadsheets/d/1Nz0rEL3-wik4jKjCBZzgb4fRzODqNZWCpg-GJ3Po5J8/edit#gid=0'
+    print('Retrieve...')
     ws = RetrieveWebSheet(sheet_url)
+    print('Operating...')
     Operator = AccountOperator()
-    Account1 = Operator.DataFrame2Account(ws, Freq='1M')
-    temp = Account1.AccountSheet
-    
+    Account1 = Operator.DataFrame2Account(ws)
+    Account1_l = Operator.RearrangeAccountByFreq(Account1, '1M', ['Category', 'Label'])
+    temp2 = Account1_l.AccountSheet
+    print('End')
 
 # gc = pygsheets.authorize(service_account_file=r'./key.json')
 
