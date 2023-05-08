@@ -2,8 +2,18 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 import pygsheets
 import pandas as pd
+import re
 from typing import Tuple, List, Dict
 from dateutil.relativedelta import relativedelta
+
+def CheckDateForm(Date:str):
+    z = re.search('[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}$', Date)
+    try:
+        z.group()
+    except:
+        return False
+    else:
+        return True
 
 def TextGetNotationPairPos(text:str, notation:str, 
                            Msg:bool=True)->List(Tuple(int, int)):
@@ -280,6 +290,7 @@ class AccountOperator(ABC):
                                     subset:List[str]=['Category']):
         assert type(AccountSheet) == pd.DataFrame
         
+        AccountSheet = AccountSheet.copy()
         if 'Label' in subset:
             temp = pd.DataFrame([], columns=AccountSheet.columns)
             for i in range(len(AccountSheet)):
@@ -320,6 +331,16 @@ class AccountOperator(ABC):
     
     def Cut(self, account:Account, 
             start_date:str, end_date:str=None, inplace=False):
+        
+        if CheckDateForm(start_date) == False:
+            print('Start date Form Error!!!')
+            return 
+
+        if end_date is not None:
+            if CheckDateForm(end_date) == False:
+                print('End date Form Error!!!')
+                return 
+            
         AccountSheet = account.AccountSheet
 
         AccountSheet = AccountSheet[start_date < AccountSheet.Date]
@@ -338,19 +359,52 @@ class AccountOperator(ABC):
         else:
             # 自動更新除了Freq外的其他項(Date, Key)
             account.AccountSheet = AccountSheet
-        
+
+class StandardWebAccount():
+    """_summary_
+    由Google sheet開始的帳務物件，將會一次儲存"原始", "1d", "1m", "1y"的Acount
+    供後續操作。
+    """
+    _TargetFreq = ['r', '1d', '1m', '1y']
+    def __init__(self, sheet_url) -> None:
+        self._sheet_url = sheet_url
+        self._RawSheet = RetrieveWebSheet(sheet_url)
+        self.Operator = AccountOperator()
+        self.Reset()
+    
+    def Reset(self, subset:List[str]=['Category']):
+        Accounts = {}
+        if 'r' not in self._TargetFreq:
+            self._TargetFreq.insert(0, 'r')
+        for f in self._TargetFreq:
+            if f == 'r':
+                AccountRaw = self.Operator.DataFrame2Account(self._RawSheet, 'r')
+                Accounts['r'] = AccountRaw
+            else:
+                Accounts[f] = self.Operator.RearrangeAccountByFreq(AccountRaw, 
+                                                                   '1M', subset)
+        self.Accounts = Accounts
+    
+    def Window(self, start_date:str, end_date:str=None):
+        for f in self._TargetFreq:
+            TargetAccount = self.Accounts[f]
+            self.Accounts[f] = self.Operator.Cut(TargetAccount, start_date, end_date)
+
 if __name__ == '__main__':
     
     sheet_url = 'https://docs.google.com/spreadsheets/d/1Nz0rEL3-wik4jKjCBZzgb4fRzODqNZWCpg-GJ3Po5J8/edit#gid=0'
-    print('Retrieve...')
-    ws = RetrieveWebSheet(sheet_url)
-    print('Operating...')
-    Operator = AccountOperator()
-    Account1 = Operator.DataFrame2Account(ws)
-    Account1_Cl = Operator.RearrangeAccountByFreq(Account1, '1M', ['Category', 'Label'])
-    Account1_l = Operator.RearrangeAccountByFreq(Account1, '1M', ['Label'])
-    Account1_cut = Operator.Cut(Account1, '2023-02-01')
-    print('End')
+    # print('Retrieve...')
+    # ws = RetrieveWebSheet(sheet_url)
+    # print('Operating...')
+    # Operator = AccountOperator()
+    # Account1 = Operator.DataFrame2Account(ws)
+    # Account1_Cl = Operator.RearrangeAccountByFreq(Account1, '1M', ['Category', 'Label'])
+    # Account1_l = Operator.RearrangeAccountByFreq(Account1, '1M', ['Label'])
+    # Account1_cut = Operator.Cut(Account1, '2023-02-01', '2023-02-28')
+    # print('End')
+    print('Construct...')
+    account = StandardWebAccount(sheet_url)
+    account.Window('2023-01-30', '2023-02-28')
 
 # gc = pygsheets.authorize(service_account_file=r'./key.json')
 
