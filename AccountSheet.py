@@ -5,6 +5,7 @@ import pandas as pd
 import re
 from typing import Tuple, List, Dict
 from dateutil.relativedelta import relativedelta
+from tabulate import tabulate
 
 def CheckDateForm(Date:str):
     z = re.search('[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}$', Date)
@@ -132,10 +133,6 @@ def ReadSetting(file:str=r'.\Setting.txt'):
     return Setting
 
 class Account(ABC):
-    SETTING = ReadSetting()
-    PAYMENT_TYPE = SETTING['PAYMENT_TYPE']
-    PAYMENT_ADDORMINUS = SETTING['PAYMENT_ADDORMINUS']
-    PAYMENT_SHORTCUT = SETTING['PAYMENT_SHORTCUT']
 
     def __init__(self, Date:Tuple[str, str], Freq:str, 
                  Key:List[str], 
@@ -311,6 +308,8 @@ class AccountOperator(ABC):
             temp_col = AccountSheet.pop('Date')
             AccountSheet.insert(0, 'Date', temp_col)        
 
+        AccountSheet = AccountSheet.reset_index(drop=True)
+
         return AccountSheet
     
     def RearrangeAccountByFreq(self, account:Account, Freq:str, 
@@ -390,21 +389,123 @@ class StandardWebAccount():
             TargetAccount = self.Accounts[f]
             self.Accounts[f] = self.Operator.Cut(TargetAccount, start_date, end_date)
 
+    def Show(self, target_f:str='r'):
+        if target_f.lower() == 'all':
+            for f in self._TargetFreq:
+                sheet = self.Accounts[f].AccountSheet
+                print(tabulate(sheet, headers='keys', tablefmt='pretty'))
+        else:
+            sheet = self.Accounts[target_f].AccountSheet
+            print(tabulate(sheet, headers='keys', tablefmt='pretty'))
+
+class GRule(ABC):
+    def __init__(self, piece:Piece, event_time:int) -> None:
+        super().__init__()
+        self.start_date = None
+        self.end_date = None
+        self._unit = piece.to_list(remain_date = False)
+        self.columns = piece.COLUMNS
+        Index = self.columns.index('Date')
+        self.non_date_columns = self.columns[:Index] + \
+                                self.columns[Index+1:]
+        self._event_time = event_time - 1
+
+    def set_date(self, start_date:str, end_date:str):
+        self.start_date = start_date
+        self.end_date = end_date
+
+    @abstractmethod
+    def generate(self)->pd.DataFrame:
+        pass
+    
+    @property
+    def unit(self):
+        return self._unit
+
+    @property
+    def event_time(self):
+        return self._event_time
+
+class WeekGRule(GRule):
+
+    def __init__(self, unit: Piece, event_time: int) -> None:
+        super().__init__(unit, event_time)
+    
+    def generate(self) -> pd.DataFrame:
+        if (self.start_date is None) or (self.end_date is None):
+            raise ValueError('Please set start and end date first.')
+        
+        df = pd.DataFrame([], columns=self.columns)
+        df.Date = [self.start_date, self.end_date]
+        df.Date = pd.to_datetime(df.Date)
+        df = df.set_index('Date')
+        df = df.resample('1d').sum()
+        df = df[df.index.dayofweek==self.event_time]
+        df[self.non_date_columns] = self.unit
+        return df
+
+# TODO: 還沒做檢查規則
+class Piece(ABC):
+
+    SETTING = ReadSetting()
+    PAYMENT_TYPE = SETTING['PAYMENT_TYPE']
+    PAYMENT_ADDORMINUS = SETTING['PAYMENT_ADDORMINUS']
+    PAYMENT_SHORTCUT = SETTING['PAYMENT_SHORTCUT']
+    COLUMNS = ['Date', 'Category', 'Name', 'Cost/Income', 'Label']
+
+    def __init__(self, Date:str=None, Category:str=None, 
+                 Name:str=None, Cost:int=None, Label:str=None):
+        self._Date = pd.to_datetime(Date)
+        self._Category = Category
+        self._Name = Name
+        self._Cost = Cost
+        self._Label = Label
+        self._Combine = [self._Date, self._Category, self._Name, 
+                         self._Cost, self._Label]
+
+    @property
+    def Date(self):
+        return self._Date
+    
+    @property
+    def Category(self):
+        return self._Category
+
+    @property
+    def Name(self):
+        return self._Name
+
+    @property
+    def Cost(self):
+        return self._Cost
+
+    @property
+    def Label(self):
+        return self._Label
+
+    def to_dataframe(self)->pd.DataFrame:
+        df = pd.DataFrame(self._Combine).T
+        df.columns = self.COLUMNS
+        return df
+    
+    def to_list(self, remain_date=True)->list:
+        if remain_date:
+            return self._Combine
+        else:
+            Index = self.COLUMNS.index('Date')
+            return self._Combine[:Index] + self._Combine[Index+1:]
+
 if __name__ == '__main__':
     
     sheet_url = 'https://docs.google.com/spreadsheets/d/1Nz0rEL3-wik4jKjCBZzgb4fRzODqNZWCpg-GJ3Po5J8/edit#gid=0'
-    # print('Retrieve...')
-    # ws = RetrieveWebSheet(sheet_url)
-    # print('Operating...')
-    # Operator = AccountOperator()
-    # Account1 = Operator.DataFrame2Account(ws)
-    # Account1_Cl = Operator.RearrangeAccountByFreq(Account1, '1M', ['Category', 'Label'])
-    # Account1_l = Operator.RearrangeAccountByFreq(Account1, '1M', ['Label'])
-    # Account1_cut = Operator.Cut(Account1, '2023-02-01', '2023-02-28')
-    # print('End')
     print('Construct...')
     account = StandardWebAccount(sheet_url)
     account.Window('2023-01-30', '2023-02-28')
+    print('End')
+    print('test week rule')
+    p = Piece(Category='收入', Name='月薪', Cost=10000)
+    rule = WeekGRule(p, 2)
+    print('End')
 
 # gc = pygsheets.authorize(service_account_file=r'./key.json')
 
