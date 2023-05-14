@@ -416,6 +416,8 @@ class GRule(ABC):
 
     @abstractmethod
     def generate(self)->pd.DataFrame:
+        if (self.start_date is None) or (self.end_date is None):
+            raise ValueError('Please set start and end date first.')
         pass
     
     @property
@@ -426,14 +428,30 @@ class GRule(ABC):
     def event_time(self):
         return self._event_time
 
+class DaysGRule(GRule):
+
+    def __init__(self, piece: Piece, event_time: int) -> None:
+        super().__init__(piece, event_time)
+    
+    def generate(self) -> pd.DataFrame:
+        super().generate()
+
+        df = pd.DataFrame([], columns=self.columns)
+        df.Date = [self.start_date, self.end_date]
+        df.Date = pd.to_datetime(df.Date)
+        df = df.set_index('Date')
+        df = df.resample('1d').sum()
+        df[self.non_date_columns] = self.unit
+        df = df.reset_index()
+        return df
+
 class WeekGRule(GRule):
 
     def __init__(self, unit: Piece, event_time: int) -> None:
         super().__init__(unit, event_time)
     
     def generate(self) -> pd.DataFrame:
-        if (self.start_date is None) or (self.end_date is None):
-            raise ValueError('Please set start and end date first.')
+        super().generate()
         
         df = pd.DataFrame([], columns=self.columns)
         df.Date = [self.start_date, self.end_date]
@@ -442,6 +460,63 @@ class WeekGRule(GRule):
         df = df.resample('1d').sum()
         df = df[df.index.dayofweek==self.event_time]
         df[self.non_date_columns] = self.unit
+        df = df.reset_index()
+        return df
+
+class WeekDayGRule(GRule):
+    
+    def __init__(self, piece: Piece) -> None:
+        super().__init__(piece, -1)
+        Mon = WeekGRule(piece, 1)
+        Tue = WeekGRule(piece, 2)
+        Wed = WeekGRule(piece, 3)
+        Thu = WeekGRule(piece, 4)
+        Fri = WeekGRule(piece, 5)
+        self.chain_of_rule = ChainOfGRule([Mon, Tue, Wed, Thu, Fri])
+    
+    def set_date(self, start_date: str, end_date: str):
+        super().set_date(start_date, end_date)
+        self.chain_of_rule.set_date(start_date, end_date)
+    
+    def generate(self) -> pd.DataFrame:
+        super().generate()
+        return self.chain_of_rule.generate()
+
+class WeekendGRule(GRule):
+
+    def __init__(self, piece: Piece, event_time: int) -> None:
+        super().__init__(piece, event_time)
+        Sat = WeekGRule(piece, 6)
+        Sun = WeekGRule(piece, 7)
+        self.chain_of_rule = ChainOfGRule([Sat, Sun])
+    
+    def set_date(self, start_date: str, end_date: str):
+        super().set_date(start_date, end_date)
+        self.chain_of_rule.set_date(start_date, end_date)
+    
+    def generate(self) -> pd.DataFrame:
+        super().generate()
+        return self.chain_of_rule.generate()
+
+class ChainOfGRule():
+
+    def __init__(self, GRuleList:List[GRule]) -> None:
+        self.GRuleList = GRuleList
+        self.start_date = None
+        self.end_date = None
+    
+    def set_date(self, start_date:str, end_date:str):
+        for rule in self.GRuleList:
+            rule.set_date(start_date, end_date)
+    
+    def generate(self):
+        DataFrameList = []
+        for rule in self.GRuleList:
+            DataFrameList.append(rule.generate())
+        
+        df = pd.concat(DataFrameList, axis=0)
+        df = df.sort_values(by=['Date'])
+        df = df.reset_index(drop=True)
         return df
 
 # TODO: 還沒做檢查規則
@@ -500,11 +575,17 @@ if __name__ == '__main__':
     sheet_url = 'https://docs.google.com/spreadsheets/d/1Nz0rEL3-wik4jKjCBZzgb4fRzODqNZWCpg-GJ3Po5J8/edit#gid=0'
     print('Construct...')
     account = StandardWebAccount(sheet_url)
-    account.Window('2023-01-30', '2023-02-28')
+    account.Show()
     print('End')
     print('test week rule')
-    p = Piece(Category='收入', Name='月薪', Cost=10000)
+    p = Piece(Category='收入', Name='週薪', Cost=10000)
     rule = WeekGRule(p, 2)
+    rule.set_date('2023-01-31', '2023-03-31')
+    print(rule.generate())
+    p2 = Piece(Category='食物', Name='早餐', Cost=45)
+    rule2 = WeekDayGRule(p)
+    rule2.set_date('2023-01-31', '2023-03-31')
+    print(rule2.generate())
     print('End')
 
 # gc = pygsheets.authorize(service_account_file=r'./key.json')
